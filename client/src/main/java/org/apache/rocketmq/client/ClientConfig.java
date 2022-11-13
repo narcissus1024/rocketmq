@@ -276,11 +276,13 @@ public class ClientConfig {
     }
 
     public String getNamespace() {
+        // namespace不为空，直接返回
         if (StringUtils.isNotEmpty(namespace)) {
             return namespace;
         }
 
         if (StringUtils.isNotEmpty(this.namesrvAddr)) {
+            // 如果是域名，返回域名最后一个/和最后一个.直接的内容
             if (NameServerAddressUtils.validateInstanceEndpoint(namesrvAddr)) {
                 return NameServerAddressUtils.parseInstanceIdFromEndpoint(namesrvAddr);
             }

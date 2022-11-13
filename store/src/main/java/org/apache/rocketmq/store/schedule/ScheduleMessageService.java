@@ -114,6 +114,10 @@ public class ScheduleMessageService extends ConfigManager {
         if (started.compareAndSet(false, true)) {
             super.load();
             this.timer = new Timer("ScheduleMessageTimerThread", true);
+            // 为每个延迟级别创建一个deliver task，该task不断的从topic：SCHEDULE_TOPIC_XXXX，queueid=延迟级别 - 1中获取cq
+            // 根据cq获取commitlog中的消息；
+            // 若能获取到，则判断是否应该投递。若不该投递，则延迟消息投递时间后再次执行task
+            // 若获取不到，则每隔100ms，执行一次task
             for (Map.Entry<Integer, Long> entry : this.delayLevelTable.entrySet()) {
                 Integer level = entry.getKey();
                 Long timeDelay = entry.getValue();
@@ -122,11 +126,13 @@ public class ScheduleMessageService extends ConfigManager {
                     offset = 0L;
                 }
 
+                // 执行延迟投递任务
                 if (timeDelay != null) {
                     this.timer.schedule(new DeliverDelayedMessageTimerTask(level, offset), FIRST_DELAY_TIME);
                 }
             }
 
+            // 每10s持久化存储一次
             this.timer.scheduleAtFixedRate(new TimerTask() {
 
                 @Override
@@ -165,6 +171,7 @@ public class ScheduleMessageService extends ConfigManager {
 
     public boolean load() {
         boolean result = super.load();
+        // 解析延迟级别对应的延迟时间
         result = result && this.parseDelayLevel();
         result = result && this.correctDelayOffset();
         return result;
@@ -236,19 +243,24 @@ public class ScheduleMessageService extends ConfigManager {
         timeUnitTable.put("h", 1000L * 60 * 60);
         timeUnitTable.put("d", 1000L * 60 * 60 * 24);
 
+        // 1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 10m 20m 30m 1h 2h
         String levelString = this.defaultMessageStore.getMessageStoreConfig().getMessageDelayLevel();
         try {
             String[] levelArray = levelString.split(" ");
             for (int i = 0; i < levelArray.length; i++) {
                 String value = levelArray[i];
+                // 获取单位
                 String ch = value.substring(value.length() - 1);
+                // 获取单位对应的时间
                 Long tu = timeUnitTable.get(ch);
 
                 int level = i + 1;
                 if (level > this.maxDelayLevel) {
                     this.maxDelayLevel = level;
                 }
+                // 获取延迟时间的数值
                 long num = Long.parseLong(value.substring(0, value.length() - 1));
+                // 计算延迟时间，tu为延迟时间单位对应的毫秒数
                 long delayTimeMillis = tu * num;
                 this.delayLevelTable.put(level, delayTimeMillis);
             }
@@ -314,6 +326,7 @@ public class ScheduleMessageService extends ConfigManager {
                         int i = 0;
                         ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
                         for (; i < bufferCQ.getSize(); i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
+                            // 解析cq中一个索引（20字节表示），物理offset、消息大小、tagscode
                             long offsetPy = bufferCQ.getByteBuffer().getLong();
                             int sizePy = bufferCQ.getByteBuffer().getInt();
                             long tagsCode = bufferCQ.getByteBuffer().getLong();
@@ -337,7 +350,9 @@ public class ScheduleMessageService extends ConfigManager {
 
                             long countdown = deliverTimestamp - now;
 
+                            // 投递时间 - 当前时间 <= 0， 说明该消息可以被消费了
                             if (countdown <= 0) {
+                                // 根据物理偏移量和消息大小从commitlog读取一条消息
                                 MessageExt msgExt =
                                     ScheduleMessageService.this.defaultMessageStore.lookMessageByOffset(
                                         offsetPy, sizePy);
@@ -345,11 +360,14 @@ public class ScheduleMessageService extends ConfigManager {
                                 if (msgExt != null) {
                                     try {
                                         MessageExtBrokerInner msgInner = this.messageTimeup(msgExt);
+                                        // 不理半消息
                                         if (TopicValidator.RMQ_SYS_TRANS_HALF_TOPIC.equals(msgInner.getTopic())) {
                                             log.error("[BUG] the real topic of schedule msg is {}, discard the msg. msg={}",
                                                 msgInner.getTopic(), msgInner);
                                             continue;
                                         }
+
+                                        // 存储消息到真实topic
                                         PutMessageResult putMessageResult =
                                             ScheduleMessageService.this.writeMessageStore
                                                 .putMessage(msgInner);
@@ -387,7 +405,8 @@ public class ScheduleMessageService extends ConfigManager {
                                             "ScheduleMessageService, messageTimeup execute error, drop it. msgExt={}, nextOffset={}, offsetPy={}, sizePy={}", msgExt, nextOffset, offsetPy, sizePy, e);
                                     }
                                 }
-                            } else {
+                            } else { // 投递时间 - 当前时间 > 0，说明消息还不应该投递，应该继续延迟
+                                // 创建一个deliver task，该task延迟（投递时间 - 当前时间）后执行
                                 ScheduleMessageService.this.timer.schedule(
                                     new DeliverDelayedMessageTimerTask(this.delayLevel, nextOffset),
                                     countdown);

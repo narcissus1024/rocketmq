@@ -139,6 +139,7 @@ public class Message implements Serializable {
     }
 
     public int getDelayTimeLevel() {
+        // DELAY
         String t = this.getProperty(MessageConst.PROPERTY_DELAY_TIME_LEVEL);
         if (t != null) {
             return Integer.parseInt(t);

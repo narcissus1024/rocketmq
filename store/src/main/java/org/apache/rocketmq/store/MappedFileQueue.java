@@ -44,7 +44,7 @@ public class MappedFileQueue {
 
     private final AllocateMappedFileService allocateMappedFileService;
 
-    protected long flushedWhere = 0;
+    protected long flushedWhere = 0; // 记录整个mappedFiles刷盘位置
     private long committedWhere = 0;
 
     private volatile long storeTimestamp = 0;
@@ -201,11 +201,15 @@ public class MappedFileQueue {
         long createOffset = -1;
         MappedFile mappedFileLast = getLastMappedFile();
 
+        // 说明commitlog下不存在文件，需要新建，起始偏移量为0
         if (mappedFileLast == null) {
             createOffset = startOffset - (startOffset % this.mappedFileSize);
         }
 
+        // 说明commitlog下存在文件，但是满了，需要新建，新建偏移量为
         if (mappedFileLast != null && mappedFileLast.isFull()) {
+            // getFileFromOffset为文件名，即一个mappedfile的起始偏移量
+            // 新建文件的偏移量为最后一个mappedfile的文件名 + 文件大小
             createOffset = mappedFileLast.getFileFromOffset() + this.mappedFileSize;
         }
 
@@ -478,6 +482,7 @@ public class MappedFileQueue {
             MappedFile firstMappedFile = this.getFirstMappedFile();
             MappedFile lastMappedFile = this.getLastMappedFile();
             if (firstMappedFile != null && lastMappedFile != null) {
+                // 不合法的范围
                 if (offset < firstMappedFile.getFileFromOffset() || offset >= lastMappedFile.getFileFromOffset() + this.mappedFileSize) {
                     LOG_ERROR.warn("Offset not matched. Request offset: {}, firstOffset: {}, lastOffset: {}, mappedFileSize: {}, mappedFiles count: {}",
                         offset,
@@ -486,6 +491,7 @@ public class MappedFileQueue {
                         this.mappedFileSize,
                         this.mappedFiles.size());
                 } else {
+                    // 取mappedFileQueue中第几个mappedfile
                     int index = (int) ((offset / this.mappedFileSize) - (firstMappedFile.getFileFromOffset() / this.mappedFileSize));
                     MappedFile targetFile = null;
                     try {

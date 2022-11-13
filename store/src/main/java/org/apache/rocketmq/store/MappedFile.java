@@ -51,7 +51,7 @@ public class MappedFile extends ReferenceResource {
     private static final AtomicInteger TOTAL_MAPPED_FILES = new AtomicInteger(0);
     protected final AtomicInteger wrotePosition = new AtomicInteger(0);
     protected final AtomicInteger committedPosition = new AtomicInteger(0);
-    private final AtomicInteger flushedPosition = new AtomicInteger(0);
+    private final AtomicInteger flushedPosition = new AtomicInteger(0); // 已刷盘的位置
     protected int fileSize;
     protected FileChannel fileChannel;
     /**
@@ -207,6 +207,7 @@ public class MappedFile extends ReferenceResource {
         int currentPos = this.wrotePosition.get();
 
         if (currentPos < this.fileSize) {
+            // 在mappedfile初始化时，会将mappedByteBuffer映射到文件。所以，若是新建的mappedfile，这里会获取到mappedByteBuffer
             ByteBuffer byteBuffer = writeBuffer != null ? writeBuffer.slice() : this.mappedByteBuffer.slice();
             byteBuffer.position(currentPos);
             AppendMessageResult result;
@@ -277,6 +278,7 @@ public class MappedFile extends ReferenceResource {
     public int flush(final int flushLeastPages) {
         if (this.isAbleToFlush(flushLeastPages)) {
             if (this.hold()) {
+                // 获取mappedfile有效数据最大位置
                 int value = getReadPosition();
 
                 try {
@@ -409,10 +411,13 @@ public class MappedFile extends ReferenceResource {
         if (pos < readPosition && pos >= 0) {
             if (this.hold()) {
                 ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
+                // 设置buffer的读指针
                 byteBuffer.position(pos);
+                // 需要同步数据的大小
                 int size = readPosition - pos;
                 ByteBuffer byteBufferNew = byteBuffer.slice();
-                byteBufferNew.limit(size);
+                // 设置buffer的limit，有效数据最大位置
+                byteBufferNew.limit(size); // 数据为[position, limit]
                 return new SelectMappedBufferResult(this.fileFromOffset + pos, byteBufferNew, size, this);
             }
         }

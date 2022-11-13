@@ -2245,6 +2245,19 @@ public class MQClientAPIImpl {
         throw new MQClientException(response.getCode(), response.getRemark());
     }
 
+    /**
+     * 目的是确保消费者订阅成功能消费到消息
+     * @param brokerAddr
+     * @param consumerGroup
+     * @param clientId
+     * @param subscriptionData
+     * @param timeoutMillis
+     * @throws InterruptedException
+     * @throws RemotingTimeoutException
+     * @throws RemotingSendRequestException
+     * @throws RemotingConnectException
+     * @throws MQClientException
+     */
     public void checkClientInBroker(final String brokerAddr, final String consumerGroup,
         final String clientId, final SubscriptionData subscriptionData,
         final long timeoutMillis)

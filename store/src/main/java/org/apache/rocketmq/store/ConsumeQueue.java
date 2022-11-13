@@ -39,7 +39,7 @@ public class ConsumeQueue {
     private final ByteBuffer byteBufferIndex;
 
     private final String storePath;
-    private final int mappedFileSize;
+    private final int mappedFileSize; // consumequeue文件大小为30w * 20
     private long maxPhysicOffset = -1;
     private volatile long minLogicOffset = 0;
     private ConsumeQueueExt consumeQueueExt = null;
@@ -378,6 +378,7 @@ public class ConsumeQueue {
 
     public void putMessagePositionInfoWrapper(DispatchRequest request) {
         final int maxRetries = 30;
+        // @1 判断consumequeue是否可写
         boolean canWrite = this.defaultMessageStore.getRunningFlags().isCQWriteable();
         for (int i = 0; i < maxRetries && canWrite; i++) {
             long tagsCode = request.getTagsCode();
@@ -395,6 +396,7 @@ public class ConsumeQueue {
                         topic, queueId, request.getCommitLogOffset());
                 }
             }
+            // @2写入 consumequeue文件
             boolean result = this.putMessagePositionInfo(request.getCommitLogOffset(),
                 request.getMsgSize(), tagsCode, request.getConsumeQueueOffset());
             if (result) {
@@ -422,6 +424,14 @@ public class ConsumeQueue {
         this.defaultMessageStore.getRunningFlags().makeLogicsQueueError();
     }
 
+    /**
+     *
+     * @param offset commitlog的offset
+     * @param size 消息大小
+     * @param tagsCode 消息 tags 的 hashcode
+     * @param cqOffset 写入consumequeue的offset，也就是queue中的offset
+     * @return
+     */
     private boolean putMessagePositionInfo(final long offset, final int size, final long tagsCode,
         final long cqOffset) {
 
@@ -430,17 +440,20 @@ public class ConsumeQueue {
             return true;
         }
 
+        // @1 首先将一条 ConsueQueue 条目总共20个字节，写入到 ByteBuffer 中
         this.byteBufferIndex.flip();
         this.byteBufferIndex.limit(CQ_STORE_UNIT_SIZE);
         this.byteBufferIndex.putLong(offset);
         this.byteBufferIndex.putInt(size);
         this.byteBufferIndex.putLong(tagsCode);
 
+        // @2 计算期望插入 ConsumeQueue 的 consumequeue 文件位置
         final long expectLogicOffset = cqOffset * CQ_STORE_UNIT_SIZE;
 
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile(expectLogicOffset);
         if (mappedFile != null) {
 
+            // @3 如果文件是新建的，需要先填充空格
             if (mappedFile.isFirstCreateInQueue() && cqOffset != 0 && mappedFile.getWrotePosition() == 0) {
                 this.minLogicOffset = expectLogicOffset;
                 this.mappedFileQueue.setFlushedWhere(expectLogicOffset);
@@ -471,6 +484,8 @@ public class ConsumeQueue {
                 }
             }
             this.maxPhysicOffset = offset + size;
+            // @4 写入到 ConsumeQueue 文件中，整个过程都是基于 MappedFile 来操作的
+            // 可以看到，最终写入文件的是byteBufferIndex，占20个字节：8字节commitlog的offset，4字节的消息大小，8字节的消息tagsCode哈希值
             return mappedFile.appendMessage(this.byteBufferIndex.array());
         }
         return false;

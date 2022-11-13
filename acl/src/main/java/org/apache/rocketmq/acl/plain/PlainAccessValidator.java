@@ -50,6 +50,8 @@ public class PlainAccessValidator implements AccessValidator {
 
     @Override
     public AccessResource parse(RemotingCommand request, String remoteAddr) {
+
+        //step1：从远程地址中提取出远程访问ip地址
         PlainAccessResource accessResource = new PlainAccessResource();
         if (remoteAddr != null && remoteAddr.contains(":")) {
             accessResource.setWhiteRemoteAddress(remoteAddr.substring(0, remoteAddr.lastIndexOf(':')));
@@ -59,6 +61,7 @@ public class PlainAccessValidator implements AccessValidator {
 
         accessResource.setRequestCode(request.getCode());
 
+        // step2：请求头的扩展字段不为空时，才会从请求头中读取`accessKey`, `signature`, `securityToken`
         if (request.getExtFields() == null) {
             // If request's extFields is null,then return accessResource directly(users can use whiteAddress pattern)
             // The following logic codes depend on the request's extFields not to be null.
@@ -68,6 +71,7 @@ public class PlainAccessValidator implements AccessValidator {
         accessResource.setSignature(request.getExtFields().get(SessionCredentials.SIGNATURE));
         accessResource.setSecretToken(request.getExtFields().get(SessionCredentials.SECURITY_TOKEN));
 
+        // step3：根据请求码，设置本次请求需要拥有的权限
         try {
             switch (request.getCode()) {
                 case RequestCode.SEND_MESSAGE:
@@ -123,6 +127,7 @@ public class PlainAccessValidator implements AccessValidator {
             throw new AclException(t.getMessage(), t);
         }
 
+        // step4：对扩展字段进行排序，便于生成签名字符串。然后将扩展字段与请求体(body)写入content字段。完成从请求头中解析出本次请求需要验证的权限
         // Content
         SortedMap<String, String> map = new TreeMap<String, String>();
         for (Map.Entry<String, String> entry : request.getExtFields().entrySet()) {

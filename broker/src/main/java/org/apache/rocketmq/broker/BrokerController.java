@@ -480,6 +480,7 @@ public class BrokerController {
                 }
             }
             initialTransaction();
+            // 初始化acl
             initialAcl();
             initialRpcHooks();
         }

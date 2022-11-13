@@ -318,9 +318,12 @@ public class PlainPermissionManager {
     }
 
     void checkPerm(PlainAccessResource needCheckedAccess, PlainAccessResource ownedAccess) {
+        // 验证是否需要admin权限
         if (Permission.needAdminPerm(needCheckedAccess.getRequestCode()) && !ownedAccess.isAdmin()) {
             throw new AclException(String.format("Need admin permission for request code=%d, but accessKey=%s is not", needCheckedAccess.getRequestCode(), ownedAccess.getAccessKey()));
         }
+
+        // 权限验证
         Map<String, Byte> needCheckedPermMap = needCheckedAccess.getResourcePermMap();
         Map<String, Byte> ownedPermMap = ownedAccess.getResourcePermMap();
 

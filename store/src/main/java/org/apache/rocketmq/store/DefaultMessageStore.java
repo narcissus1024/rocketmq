@@ -109,6 +109,7 @@ public class DefaultMessageStore implements MessageStore {
 
     private AtomicLong printTimes = new AtomicLong(0);
 
+    // 同步commitlog中的消息到consumeQueue与index的dispatcher
     private final LinkedList<CommitLogDispatcher> dispatcherList;
 
     private RandomAccessFile lockFile;
@@ -394,6 +395,7 @@ public class DefaultMessageStore implements MessageStore {
             return PutMessageStatus.SERVICE_NOT_AVAILABLE;
         }
 
+        // 不可向从节点发送消息
         if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
             long value = this.printTimes.getAndIncrement();
             if ((value % 50000) == 0) {
@@ -421,11 +423,13 @@ public class DefaultMessageStore implements MessageStore {
 
     @Override
     public CompletableFuture<PutMessageResult> asyncPutMessage(MessageExtBrokerInner msg) {
+        // 检测接收到请求的broker是否可以 发送/存储消息
         PutMessageStatus checkStoreStatus = this.checkStoreStatus();
         if (checkStoreStatus != PutMessageStatus.PUT_OK) {
             return CompletableFuture.completedFuture(new PutMessageResult(checkStoreStatus, null));
         }
 
+        // 检查消息是否合法，包括topic长度，消息属性长度
         PutMessageStatus msgCheckStatus = this.checkMessage(msg);
         if (msgCheckStatus == PutMessageStatus.MESSAGE_ILLEGAL) {
             return CompletableFuture.completedFuture(new PutMessageResult(msgCheckStatus, null));
@@ -1490,6 +1494,14 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public void doDispatch(DispatchRequest req) {
+        /*
+        * CommitLogDispatcher
+        *
+        * consumeQueue对应CommitLogDispatcherBuildConsumeQueue
+        * index对应CommitlogDispatcherBuildIndex
+        *
+        * dispatcherList在该类初始化时，会加入上面两个分发器实例
+         * */
         for (CommitLogDispatcher dispatcher : this.dispatcherList) {
             dispatcher.dispatch(req);
         }
@@ -1942,6 +1954,7 @@ public class DefaultMessageStore implements MessageStore {
         }
 
         private void doReput() {
+            // commitLog.getMinOffset()获取mappedFileQueue中第一个mappedfile的起始偏移量
             if (this.reputFromOffset < DefaultMessageStore.this.commitLog.getMinOffset()) {
                 log.warn("The reputFromOffset={} is smaller than minPyOffset={}, this usually indicate that the dispatch behind too much and the commitlog has expired.",
                     this.reputFromOffset, DefaultMessageStore.this.commitLog.getMinOffset());
@@ -1954,18 +1967,22 @@ public class DefaultMessageStore implements MessageStore {
                     break;
                 }
 
+                // @1 根据offset从commitlog找到需要同步的数据
                 SelectMappedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
                 if (result != null) {
                     try {
-                        this.reputFromOffset = result.getStartOffset();
+                        this.reputFromOffset = result.getStartOffset(); // 和之前的不一样吗？
 
+                        // buffer中每次解析出一条消息
                         for (int readSize = 0; readSize < result.getSize() && doNext; ) {
+                            // @2 构建转发请求对象dispatchRequest，从buffer中解析消息各个属性（消息存储格式见 1消息存储格式）
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
                             int size = dispatchRequest.getBufferSize() == -1 ? dispatchRequest.getMsgSize() : dispatchRequest.getBufferSize();
 
                             if (dispatchRequest.isSuccess()) {
                                 if (size > 0) {
+                                    // @3 转发dispatchRequest
                                     DefaultMessageStore.this.doDispatch(dispatchRequest);
 
                                     if (BrokerRole.SLAVE != DefaultMessageStore.this.getMessageStoreConfig().getBrokerRole()

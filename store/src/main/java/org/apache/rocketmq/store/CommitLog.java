@@ -173,10 +173,20 @@ public class CommitLog {
         return this.getData(offset, offset == 0);
     }
 
+    /**
+     * offset：commitlog中已经同步到consumequeue的位置
+     * ① offset / 文件大小，找出具体的mappedfile
+     * ② oofset % 文件大小，找出具体mappedfile中需要开始同步的位置
+     * ③ 从mappedfile的mappedByteBuffer中slice出一个buffer，
+     *   该buffer的容量为需要同步数据的数据大小；数据为需要同步的数据
+     */
     public SelectMappedBufferResult getData(final long offset, final boolean returnFirstOnNotFound) {
+        // commitlog：1G；consumequeue：30w * 20 = 5MB+
         int mappedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog();
+        // 根据offset从MappedFileQueue中选择mappedfile的索引，取出
         MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset, returnFirstOnNotFound);
         if (mappedFile != null) {
+            // 取出mappedfile中需要同步数据(同步到consumeQueue)的位置
             int pos = (int) (offset % mappedFileSize);
             SelectMappedBufferResult result = mappedFile.selectMappedBuffer(pos);
             return result;
@@ -588,6 +598,7 @@ public class CommitLog {
 
     public CompletableFuture<PutMessageResult> asyncPutMessage(final MessageExtBrokerInner msg) {
         // Set the storage time
+        // 获取当时时间，作为消息存储时间
         msg.setStoreTimestamp(System.currentTimeMillis());
         // Set the message body BODY CRC (consider the most appropriate setting
         // on the client)
@@ -603,13 +614,17 @@ public class CommitLog {
         final int tranType = MessageSysFlag.getTransactionValue(msg.getSysFlag());
         if (tranType == MessageSysFlag.TRANSACTION_NOT_TYPE
                 || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
-            // Delay Delivery
+            // Delay Delivery。延迟消息
             if (msg.getDelayTimeLevel() > 0) {
+                // 最大延迟级别限制
                 if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
                     msg.setDelayTimeLevel(this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel());
                 }
 
+                // SCHEDULE_TOPIC_XXXX
                 topic = TopicValidator.RMQ_SYS_SCHEDULE_TOPIC;
+                // 消息的延迟级别存储在消息的属性中，DELAY
+                // queueid = 延迟级别 - 1
                 queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
 
                 // Backup real topic, queueId
@@ -617,16 +632,19 @@ public class CommitLog {
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_QUEUE_ID, String.valueOf(msg.getQueueId()));
                 msg.setPropertiesString(MessageDecoder.messageProperties2String(msg.getProperties()));
 
+                // 更改msg的topic为SCHEDULE_TOPIC_XXXX，queueid为延迟级别 - 1
                 msg.setTopic(topic);
                 msg.setQueueId(queueId);
             }
         }
 
+        // 消息的发送地址
         InetSocketAddress bornSocketAddress = (InetSocketAddress) msg.getBornHost();
         if (bornSocketAddress.getAddress() instanceof Inet6Address) {
             msg.setBornHostV6Flag();
         }
 
+        // 消息存储地址
         InetSocketAddress storeSocketAddress = (InetSocketAddress) msg.getStoreHost();
         if (storeSocketAddress.getAddress() instanceof Inet6Address) {
             msg.setStoreHostAddressV6Flag();
@@ -638,6 +656,7 @@ public class CommitLog {
             return CompletableFuture.completedFuture(encodeResult);
         }
         msg.setEncodedBuff(putMessageThreadLocal.getEncoder().encoderBuffer);
+        // topic-queueid
         PutMessageContext putMessageContext = new PutMessageContext(generateKey(putMessageThreadLocal.getKeyBuilder(), msg));
 
         long elapsedTimeInLock = 0;
@@ -653,6 +672,7 @@ public class CommitLog {
             // global
             msg.setStoreTimestamp(beginLockTimestamp);
 
+            // 创建mappedfile
             if (null == mappedFile || mappedFile.isFull()) {
                 mappedFile = this.mappedFileQueue.getLastMappedFile(0); // Mark: NewFile may be cause noise
             }
@@ -710,6 +730,7 @@ public class CommitLog {
         storeStatsService.getSinglePutMessageTopicTimesTotal(msg.getTopic()).add(1);
         storeStatsService.getSinglePutMessageTopicSizeTotal(topic).add(result.getWroteBytes());
 
+        // 消息刷盘
         CompletableFuture<PutMessageStatus> flushResultFuture = submitFlushRequest(result, msg);
         CompletableFuture<PutMessageStatus> replicaResultFuture = submitReplicaRequest(result, msg);
         return flushResultFuture.thenCombine(replicaResultFuture, (flushStatus, replicaStatus) -> {
@@ -1282,6 +1303,15 @@ public class CommitLog {
             this.maxMessageSize = size;
         }
 
+        /**
+         *
+         * @param fileFromOffset 文件名，即文件起始偏移量
+         * @param byteBuffer mappedfile对应的bytebuffer或mappedByteBuffer的slice
+         * @param maxBlank 文件剩余容量
+         * @param msgInner 消息
+         * @param putMessageContext
+         * @return
+         */
         public AppendMessageResult doAppend(final long fileFromOffset, final ByteBuffer byteBuffer, final int maxBlank,
             final MessageExtBrokerInner msgInner, PutMessageContext putMessageContext) {
             // STORETIMESTAMP + STOREHOSTADDRESS + OFFSET <br>
@@ -1300,7 +1330,7 @@ public class CommitLog {
             };
 
             // Record ConsumeQueue information
-            String key = putMessageContext.getTopicQueueTableKey();
+            String key = putMessageContext.getTopicQueueTableKey(); // topic-queueid
             Long queueOffset = CommitLog.this.topicQueueTable.get(key);
             if (null == queueOffset) {
                 queueOffset = 0L;
@@ -1323,6 +1353,7 @@ public class CommitLog {
             }
 
             ByteBuffer preEncodeBuffer = msgInner.getEncodedBuff();
+            // 消息大小
             final int msgLen = preEncodeBuffer.getInt(0);
 
             // Determines whether there is sufficient free space
@@ -1714,7 +1745,7 @@ public class CommitLog {
     }
 
     static class PutMessageContext {
-        private String topicQueueTableKey;
+        private String topicQueueTableKey; // topic-queueid
         private long[] phyPos;
         private int batchSize;
 
