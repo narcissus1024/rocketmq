@@ -535,9 +535,8 @@ public class RouteInfoManager {
             for (final UnRegisterBrokerRequestHeader unRegisterRequest : unRegisterRequests) {
                 final String brokerName = unRegisterRequest.getBrokerName();
                 final String clusterName = unRegisterRequest.getClusterName();
-                final String brokerAddr = unRegisterRequest.getBrokerAddr();
 
-                BrokerAddrInfo brokerAddrInfo = new BrokerAddrInfo(clusterName, brokerAddr);
+                BrokerAddrInfo brokerAddrInfo = new BrokerAddrInfo(clusterName, unRegisterRequest.getBrokerAddr());
 
                 BrokerLiveInfo brokerLiveInfo = this.brokerLiveTable.remove(brokerAddrInfo);
                 log.info("unregisterBroker, remove from brokerLiveTable {}, {}",
@@ -555,9 +554,9 @@ public class RouteInfoManager {
                         unRegisterRequest.getBrokerId().equals(Collections.min(brokerData.getBrokerAddrs().keySet()))) {
                         isMinBrokerIdChanged = true;
                     }
-                    boolean removed = brokerData.getBrokerAddrs().entrySet().removeIf(item -> item.getValue().equals(brokerAddr));
+                    String addr = brokerData.getBrokerAddrs().remove(unRegisterRequest.getBrokerId());
                     log.info("unregisterBroker, remove addr from brokerAddrTable {}, {}",
-                        removed ? "OK" : "Failed",
+                        addr != null ? "OK" : "Failed",
                         brokerAddrInfo
                     );
                     if (brokerData.getBrokerAddrs().isEmpty()) {
@@ -569,7 +568,7 @@ public class RouteInfoManager {
                         removeBrokerName = true;
                     } else if (isMinBrokerIdChanged) {
                         needNotifyBrokerMap.put(brokerName, new BrokerStatusChangeInfo(
-                            brokerData.getBrokerAddrs(), brokerAddr, null));
+                            brokerData.getBrokerAddrs(), addr, null));
                     }
                 }
 
